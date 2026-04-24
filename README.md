@@ -1,4 +1,4 @@
-en la terminal ejecutar el comando:
+en la terminal del vCode ejecutar el comando:
 
 python -m venv venv
 
