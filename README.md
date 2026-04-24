@@ -20,6 +20,6 @@ incluir el dataset descargado creando una carpeta data con el nombre de data
 por ultimo crear una carpeta reports
 
 
-para ejecutar el programa usar el comando
+para ejecutar el programa usar el comando, verificar de que estas en la carpeta raiz  ej: C:\Users\Admin\Desktop\caso8fraude
 
 streamlit run app/frontend/dashboard.py
