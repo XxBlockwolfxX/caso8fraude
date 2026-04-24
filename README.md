@@ -18,3 +18,8 @@ incluir el dataset descargado creando una carpeta data con el nombre de data
 
 
 por ultimo crear una carpeta reports
+
+
+para ejecutar el programa usar el comando
+
+streamlit run app/frontend/dashboard.py
