@@ -1,10 +1,16 @@
 {
     "best_model_name": "random_forest",
-    "strategy": "smote",
+    "strategy": "class_weight",
     "selected_threshold": 0.5,
-    "pr_auc": 0.8764692322089636,
-    "roc_auc": 0.9761163047098411,
-    "precision": 0.8631578947368421,
-    "recall": 0.8367346938775511,
-    "f1": 0.8497409326424871
+    "cv_precision_mean": 0.9556525441771344,
+    "cv_recall_mean": 0.741123012009088,
+    "cv_f1_mean": 0.8340898115880494,
+    "cv_roc_auc_mean": 0.9552972000357794,
+    "cv_pr_auc_mean": 0.8459356674732377,
+    "test_accuracy": 0.9995259997893332,
+    "test_precision": 0.961038961038961,
+    "test_recall": 0.7551020408163265,
+    "test_f1": 0.8457142857142858,
+    "test_roc_auc": 0.9575659575873119,
+    "test_pr_auc": 0.8554200496997085
 }
