@@ -18,7 +18,7 @@ from app.backend.threshold import evaluate_threshold
 
 st.set_page_config(page_title="Fraud Detection Dashboard", layout="wide")
 st.title("Detección de fraude con tarjetas de crédito")
-st.write("Sistema analítico con Python, FastAPI y Streamlit")
+st.write("Sistema de analisis con Python, FastAPI y Streamlit")
 
 menu = st.sidebar.radio(
     "Menú",
