@@ -1,39 +1,31 @@
 import json
 import os
 import joblib
-import pandas as pd
 import numpy as np
+import pandas as pd
 
-from sklearn.model_selection import StratifiedKFold, cross_validate
-from imblearn.over_sampling import SMOTE
-from imblearn.under_sampling import RandomUnderSampler
 from imblearn.pipeline import Pipeline as ImbPipeline
+from imblearn.under_sampling import RandomUnderSampler
+from sklearn.model_selection import StratifiedKFold, cross_validate
 
-from app.backend.models import get_model
 from app.backend.evaluate import evaluate_model
+from app.backend.models import get_model
+from app.backend.preprocess import build_preprocessor
 
 
-def build_pipeline(model_name: str, strategy: str):
-    """
-    Construye el pipeline del modelo según la estrategia:
-    - class_weight
-    - smote
-    - undersample
-    """
+def build_pipeline(model_name: str, strategy: str, X_train: pd.DataFrame):
+    preprocessor = build_preprocessor(X_train)
     model = get_model(model_name, strategy)
 
-    if strategy == "smote":
+    if strategy == "undersample":
         pipeline = ImbPipeline([
-            ("smote", SMOTE(random_state=42)),
-            ("model", model)
-        ])
-    elif strategy == "undersample":
-        pipeline = ImbPipeline([
+            ("preprocessor", preprocessor),
             ("undersample", RandomUnderSampler(random_state=42)),
             ("model", model)
         ])
     else:
         pipeline = ImbPipeline([
+            ("preprocessor", preprocessor),
             ("model", model)
         ])
 
@@ -42,30 +34,24 @@ def build_pipeline(model_name: str, strategy: str):
 
 def compare_models(X_train, y_train, X_test, y_test):
     """
-    Compara 6 combinaciones:
-    1. Logistic Regression + class_weight
-    2. Logistic Regression + SMOTE
-    3. Logistic Regression + undersample
-    4. Random Forest + class_weight
-    5. Random Forest + SMOTE
-    6. Random Forest + undersample
-
-    Ahora además usa StratifiedKFold para obtener promedios
-    más confiables de Precision, Recall, F1 y PR-AUC.
+    Quitamos SMOTE en este dataset porque consume demasiada memoria.
+    Dejamos 4 combinaciones más ligeras:
+    - Logistic Regression + class_weight
+    - Logistic Regression + undersample
+    - Random Forest + class_weight
+    - Random Forest + undersample
     """
     combinations = [
         ("logistic_regression", "class_weight"),
-        ("logistic_regression", "smote"),
         ("logistic_regression", "undersample"),
         ("random_forest", "class_weight"),
-        ("random_forest", "smote"),
         ("random_forest", "undersample"),
     ]
 
     results = []
     trained_models = {}
 
-    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
 
     scoring = {
         "precision": "precision",
@@ -76,49 +62,35 @@ def compare_models(X_train, y_train, X_test, y_test):
     }
 
     for model_name, strategy in combinations:
-        pipeline = build_pipeline(model_name, strategy)
+        pipeline = build_pipeline(model_name, strategy, X_train)
 
-        # Validación cruzada estratificada
         cv_results = cross_validate(
             pipeline,
             X_train,
             y_train,
             cv=skf,
             scoring=scoring,
-            n_jobs=-1,
+            n_jobs=1,   # más seguro en memoria
             return_train_score=False
         )
 
-        # Entrenamiento final para luego evaluar en test
         pipeline.fit(X_train, y_train)
-
         test_metrics = evaluate_model(pipeline, X_test, y_test, threshold=0.5)
 
         result = {
             "model_name": model_name,
             "strategy": strategy,
-
-            # Promedios de validación cruzada
             "cv_precision_mean": float(np.mean(cv_results["test_precision"])),
             "cv_recall_mean": float(np.mean(cv_results["test_recall"])),
             "cv_f1_mean": float(np.mean(cv_results["test_f1"])),
             "cv_roc_auc_mean": float(np.mean(cv_results["test_roc_auc"])),
             "cv_pr_auc_mean": float(np.mean(cv_results["test_pr_auc"])),
-
-            # Desviación estándar opcional para mostrar estabilidad
-            "cv_precision_std": float(np.std(cv_results["test_precision"])),
-            "cv_recall_std": float(np.std(cv_results["test_recall"])),
-            "cv_f1_std": float(np.std(cv_results["test_f1"])),
-            "cv_roc_auc_std": float(np.std(cv_results["test_roc_auc"])),
-            "cv_pr_auc_std": float(np.std(cv_results["test_pr_auc"])),
-
-            # Métricas en test final
-            "test_accuracy": test_metrics["accuracy"],
-            "test_precision": test_metrics["precision"],
-            "test_recall": test_metrics["recall"],
-            "test_f1": test_metrics["f1"],
-            "test_roc_auc": test_metrics["roc_auc"],
-            "test_pr_auc": test_metrics["pr_auc"],
+            "test_accuracy": float(test_metrics["accuracy"]),
+            "test_precision": float(test_metrics["precision"]),
+            "test_recall": float(test_metrics["recall"]),
+            "test_f1": float(test_metrics["f1"]),
+            "test_roc_auc": float(test_metrics["roc_auc"]),
+            "test_pr_auc": float(test_metrics["pr_auc"]),
         }
 
         results.append(result)
@@ -132,38 +104,22 @@ def compare_models(X_train, y_train, X_test, y_test):
     return results_df, trained_models
 
 
-def get_sampling_preview(X_train, y_train):
-    """
-    Muestra cómo cambian las clases:
-    - Original
-    - Después de SMOTE
-    - Después de Undersampling
-    """
-    original_counts = y_train.value_counts().sort_index()
-
-    smote = SMOTE(random_state=42)
-    _, y_smote = smote.fit_resample(X_train, y_train)
-    smote_counts = pd.Series(y_smote).value_counts().sort_index()
-
-    undersample = RandomUnderSampler(random_state=42)
-    _, y_under = undersample.fit_resample(X_train, y_train)
-    under_counts = pd.Series(y_under).value_counts().sort_index()
+def get_sampling_preview(y_train: pd.Series) -> pd.DataFrame:
+    counts = y_train.value_counts().sort_index()
+    class_0 = int(counts.get(0, 0))
+    class_1 = int(counts.get(1, 0))
 
     preview_df = pd.DataFrame({
-        "Original": original_counts,
-        "SMOTE": smote_counts,
-        "Undersample": under_counts
-    }).fillna(0).astype(int)
+        "Original": [class_0, class_1],
+        "Undersample": [min(class_0, class_1), min(class_0, class_1)],
+    }, index=["Clase 0", "Clase 1"])
 
-    preview_df.index = ["Clase 0", "Clase 1"]
     return preview_df
 
 
-def save_best_model(model, scaler, metadata: dict):
+def save_best_model(model, metadata: dict):
     os.makedirs("models", exist_ok=True)
-
     joblib.dump(model, "models/best_model.pkl")
-    joblib.dump(scaler, "models/scaler.pkl")
 
     with open("models/metadata.json", "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=4, ensure_ascii=False)
@@ -171,11 +127,10 @@ def save_best_model(model, scaler, metadata: dict):
 
 def load_best_model():
     model = joblib.load("models/best_model.pkl")
-    scaler = joblib.load("models/scaler.pkl")
 
     metadata = {}
     if os.path.exists("models/metadata.json"):
         with open("models/metadata.json", "r", encoding="utf-8") as f:
             metadata = json.load(f)
 
-    return model, scaler, metadata
+    return model, metadata

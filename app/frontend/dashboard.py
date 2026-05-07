@@ -6,49 +6,34 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 import os
-import streamlit as st
-import pandas as pd
 import matplotlib.pyplot as plt
+import pandas as pd
+import streamlit as st
 
 from app.backend.data_loader import load_data, get_basic_info
-from app.backend.preprocess import split_data, scale_time_amount
-from app.backend.train import compare_models, save_best_model, load_best_model, get_sampling_preview
 from app.backend.evaluate import evaluate_model, get_precision_recall_data, get_roc_data
+from app.backend.preprocess import (
+    split_data,
+    build_manual_input_dataframe,
+)
 from app.backend.threshold import (
     evaluate_threshold,
+    generate_threshold_table,
     get_threshold_recommendations,
-    generate_threshold_table
+)
+from app.backend.train import (
+    compare_models,
+    get_sampling_preview,
+    load_best_model,
+    save_best_model,
 )
 
-def show_section_note(text):
-    st.markdown(
-        f"""
-        <div style="
-            padding: 14px;
-            border-radius: 12px;
-            background-color: rgba(59, 130, 246, 0.10);
-            border: 1px solid rgba(59, 130, 246, 0.35);
-            margin-bottom: 18px;
-        ">
-            {text}
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
 st.set_page_config(page_title="Fraud Detection Dashboard", layout="wide")
-st.title("Detección de fraude con tarjetas de crédito")
+st.title("Detección de fraude financiero")
 st.write("Sistema analítico con Python, FastAPI y Streamlit")
 
 st.markdown("""
 <style>
-.metric-card {
-    padding: 14px;
-    border-radius: 14px;
-    background-color: #111827;
-    border: 1px solid #374151;
-    margin-bottom: 10px;
-}
 .result-ok {
     padding: 16px;
     border-radius: 14px;
@@ -65,14 +50,20 @@ st.markdown("""
     color: #fee2e2;
     font-weight: 600;
 }
-.section-note {
+.note-box {
     padding: 14px;
     border-radius: 12px;
-    background-color: rgba(59, 130, 246, 0.12);
+    background-color: rgba(59, 130, 246, 0.10);
     border: 1px solid rgba(59, 130, 246, 0.35);
+    margin-bottom: 18px;
 }
 </style>
 """, unsafe_allow_html=True)
+
+
+def show_section_note(text: str):
+    st.markdown(f'<div class="note-box">{text}</div>', unsafe_allow_html=True)
+
 
 menu = st.sidebar.radio(
     "Menú",
@@ -97,86 +88,126 @@ df = get_data()
 
 if menu == "Inicio":
     st.subheader("Contexto del problema")
-    show_section_note("Esta sección presenta el contexto del problema, la magnitud del fraude financiero y el objetivo principal del sistema.")
+    show_section_note(
+        "Esta sección presenta el contexto del nuevo caso. "
+        "Ahora trabajamos con dos datasets: transacciones e identidad."
+    )
+
     st.write("""
-    El fraude financiero es un problema de alto impacto económico. En este dataset,
-    la clase fraude es extremadamente minoritaria, por lo que la exactitud (accuracy)
-    puede ser engañosa. El objetivo del sistema es detectar más fraudes sin generar
-    demasiadas falsas alarmas.
+    El fraude financiero es un problema de alto impacto económico. En este nuevo dataset,
+    la variable objetivo es **isFraud**, y el reto principal sigue siendo el desbalance
+    de clases: hay muchas transacciones legítimas y pocas fraudulentas.
     """)
 
     info = get_basic_info(df)
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Total transacciones", info["rows"])
     c2.metric("Fraudes", info["fraud_count"])
     c3.metric("Legítimas", info["legit_count"])
     c4.metric("% Fraude", f"{info['fraud_ratio'] * 100:.4f}%")
+    c5.metric("% Nulos", f"{info['missing_ratio'] * 100:.2f}%")
 
     st.subheader("Objetivo analítico")
     st.write("""
-    Comparar modelos y estrategias de manejo del desbalance, analizar la relación
-    entre Precisión y Recall, y apoyar una decisión de negocio basada en el umbral de clasificación.
+    Unir `train_transaction.csv` con `train_identity.csv`, preparar los datos,
+    comparar modelos y estrategias de balanceo, y apoyar una decisión de negocio
+    basada en el umbral de clasificación.
     """)
 
 elif menu == "EDA":
     st.subheader("Exploración de datos")
-    show_section_note("Aquí se analiza el dataset para entender el desbalance de clases y el comportamiento de variables importantes como Amount y Time.")
-    st.write("Primeras filas del dataset")
+    show_section_note(
+        "Aquí se analiza el nuevo dataset usando variables más interpretables como "
+        "TransactionAmt, TransactionDT y algunas categóricas."
+    )
+
+    st.write("Primeras filas del dataset combinado")
     st.dataframe(df.head(10), use_container_width=True)
 
-    st.subheader("Distribución de clases")
-    fig, ax = plt.subplots()
-    df["Class"].value_counts().sort_index().plot(kind="bar", ax=ax)
+    st.subheader("Distribución de clases (isFraud)")
+    fig, ax = plt.subplots(figsize=(6, 4))
+    df["isFraud"].value_counts().sort_index().plot(kind="bar", ax=ax)
     ax.set_xticks([0, 1])
     ax.set_xticklabels(["Legítima", "Fraude"], rotation=0)
     ax.set_ylabel("Cantidad")
     ax.set_title("Desbalance de clases")
     st.pyplot(fig)
 
-    st.subheader("Boxplot de Amount por clase")
-    fig2, ax2 = plt.subplots()
-    df.boxplot(column="Amount", by="Class", ax=ax2)
-    ax2.set_title("Amount por clase")
-    ax2.set_xlabel("Class")
-    ax2.set_ylabel("Amount")
+    st.subheader("Boxplot de TransactionAmt por isFraud")
+    fig2, ax2 = plt.subplots(figsize=(8, 4))
+    df.boxplot(column="TransactionAmt", by="isFraud", ax=ax2)
+    ax2.set_title("TransactionAmt por clase")
+    ax2.set_xlabel("isFraud")
+    ax2.set_ylabel("TransactionAmt")
     st.pyplot(fig2)
 
-    st.subheader("Boxplot de Time por clase")
-    fig3, ax3 = plt.subplots()
-    df.boxplot(column="Time", by="Class", ax=ax3)
-    ax3.set_title("Time por clase")
-    ax3.set_xlabel("Class")
-    ax3.set_ylabel("Time")
+    st.subheader("Boxplot de TransactionDT por isFraud")
+    fig3, ax3 = plt.subplots(figsize=(8, 4))
+    df.boxplot(column="TransactionDT", by="isFraud", ax=ax3)
+    ax3.set_title("TransactionDT por clase")
+    ax3.set_xlabel("isFraud")
+    ax3.set_ylabel("TransactionDT")
     st.pyplot(fig3)
+
+    if "ProductCD" in df.columns:
+        st.subheader("Distribución de ProductCD")
+        product_counts = df["ProductCD"].fillna("Missing").value_counts().head(10)
+        fig4, ax4 = plt.subplots(figsize=(8, 4))
+        product_counts.plot(kind="bar", ax=ax4)
+        ax4.set_title("Frecuencia de ProductCD")
+        ax4.set_ylabel("Cantidad")
+        st.pyplot(fig4)
+
+    if "card4" in df.columns:
+        st.subheader("Distribución de card4")
+        card4_counts = df["card4"].fillna("Missing").value_counts().head(10)
+        fig5, ax5 = plt.subplots(figsize=(8, 4))
+        card4_counts.plot(kind="bar", ax=ax5)
+        ax5.set_title("Frecuencia de card4")
+        ax5.set_ylabel("Cantidad")
+        st.pyplot(fig5)
+
+    st.subheader("Top columnas con más valores nulos")
+    missing_df = (
+        df.isna().mean()
+        .sort_values(ascending=False)
+        .head(15)
+        .reset_index()
+    )
+    missing_df.columns = ["Columna", "Porcentaje_nulos"]
+
+    fig6, ax6 = plt.subplots(figsize=(10, 5))
+    ax6.barh(missing_df["Columna"], missing_df["Porcentaje_nulos"])
+    ax6.set_title("Porcentaje de nulos por columna")
+    ax6.set_xlabel("Porcentaje")
+    ax6.invert_yaxis()
+    st.pyplot(fig6)
 
 elif menu == "Modelado":
     st.subheader("Comparación de modelos")
-    show_section_note("En esta sección se comparan distintos modelos y estrategias de balanceo para identificar cuál ofrece mejor desempeño.")
+    show_section_note(
+    "En esta sección se comparan Logistic Regression y Random Forest con "
+    "class_weight y undersampling. En este dataset grande se quitó SMOTE "
+    "para evitar errores de memoria."
+)
     X_train, X_test, y_train, y_test = split_data(df)
-    X_train_scaled, X_test_scaled, scaler = scale_time_amount(X_train, X_test)
 
-    st.write("Distribución de clases antes y después del reesampling")
-    sampling_preview = get_sampling_preview(X_train_scaled, y_train)
+    st.write("Vista del efecto del balanceo")
+    sampling_preview = get_sampling_preview(y_train)
     st.dataframe(sampling_preview, use_container_width=True)
 
-    fig_sampling, ax_sampling = plt.subplots()
+    fig_sampling, ax_sampling = plt.subplots(figsize=(7, 4))
     sampling_preview.plot(kind="bar", ax=ax_sampling)
-    ax_sampling.set_title("Comparación de clases: original vs reesampling")
+    ax_sampling.set_title("Original vs balanceo")
     ax_sampling.set_ylabel("Cantidad")
     ax_sampling.set_xlabel("Clase")
     st.pyplot(fig_sampling)
 
     if st.button("Entrenar y comparar modelos"):
-        results_df, trained_models = compare_models(X_train_scaled, y_train, X_test_scaled, y_test)
+        results_df, trained_models = compare_models(X_train, y_train, X_test, y_test)
 
         st.write("Resultados comparativos")
         st.dataframe(results_df, use_container_width=True)
-
-        st.subheader("Promedios de validación cruzada")
-        st.write("""
-        Estas métricas provienen de StratifiedKFold, por lo que muestran un rendimiento
-        más estable y confiable que una sola partición.
-        """)
 
         best_row = results_df.iloc[0]
         best_key = f"{best_row['model_name']}_{best_row['strategy']}"
@@ -199,24 +230,23 @@ elif menu == "Modelado":
             "test_pr_auc": float(best_row["test_pr_auc"]),
         }
 
-        save_best_model(best_model, scaler, metadata)
-
-        st.success(
-            f"Mejor modelo guardado: {best_row['model_name']} + {best_row['strategy']}"
-        )
+        save_best_model(best_model, metadata)
+        st.success(f"Mejor modelo guardado: {best_row['model_name']} + {best_row['strategy']}")
 
 elif menu == "Evaluación":
     st.subheader("Evaluación del mejor modelo")
-    show_section_note("Aquí se visualiza el rendimiento del mejor modelo mediante métricas, matriz de confusión y curvas de evaluación.")
+    show_section_note(
+        "Aquí se evalúa el mejor modelo usando matriz de confusión, "
+        "Precision-Recall, ROC y reporte de clasificación."
+    )
+
     if not os.path.exists("models/best_model.pkl"):
         st.warning("Primero debes entrenar el modelo en la sección Modelado.")
     else:
-        model, scaler, metadata = load_best_model()
+        model, metadata = load_best_model()
 
         X_train, X_test, y_train, y_test = split_data(df)
-        X_train_scaled, X_test_scaled, scaler = scale_time_amount(X_train, X_test)
-
-        results = evaluate_model(model, X_test_scaled, y_test, threshold=metadata.get("selected_threshold", 0.5))
+        results = evaluate_model(model, X_test, y_test, threshold=metadata.get("selected_threshold", 0.5))
 
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Accuracy", f"{results['accuracy']:.4f}")
@@ -235,8 +265,8 @@ elif menu == "Evaluación":
         st.dataframe(cm_df, use_container_width=True)
 
         st.subheader("Curva Precision-Recall")
-        precision, recall, thresholds = get_precision_recall_data(y_test, results["y_probs"])
-        fig_pr, ax_pr = plt.subplots()
+        precision, recall, _ = get_precision_recall_data(y_test, results["y_probs"])
+        fig_pr, ax_pr = plt.subplots(figsize=(6, 4))
         ax_pr.plot(recall, precision)
         ax_pr.set_xlabel("Recall")
         ax_pr.set_ylabel("Precision")
@@ -244,8 +274,8 @@ elif menu == "Evaluación":
         st.pyplot(fig_pr)
 
         st.subheader("Curva ROC")
-        fpr, tpr, roc_thresholds = get_roc_data(y_test, results["y_probs"])
-        fig_roc, ax_roc = plt.subplots()
+        fpr, tpr, _ = get_roc_data(y_test, results["y_probs"])
+        fig_roc, ax_roc = plt.subplots(figsize=(6, 4))
         ax_roc.plot(fpr, tpr)
         ax_roc.set_xlabel("False Positive Rate")
         ax_roc.set_ylabel("True Positive Rate")
@@ -257,16 +287,18 @@ elif menu == "Evaluación":
 
 elif menu == "Umbral":
     st.subheader("Análisis de umbral de decisión")
-    show_section_note("Esta sección permite analizar cómo cambia el equilibrio entre detectar más fraudes y generar más falsas alarmas al mover el umbral.")
+    show_section_note(
+        "Esta sección ayuda a decidir qué umbral conviene usar según el equilibrio "
+        "entre capturar más fraudes y generar más falsas alarmas."
+    )
+
     if not os.path.exists("models/best_model.pkl"):
         st.warning("Primero debes entrenar el modelo en la sección Modelado.")
     else:
-        model, scaler, metadata = load_best_model()
+        model, metadata = load_best_model()
 
         X_train, X_test, y_train, y_test = split_data(df)
-        X_train_scaled, X_test_scaled, scaler = scale_time_amount(X_train, X_test)
-
-        y_probs = model.predict_proba(X_test_scaled)[:, 1]
+        y_probs = model.predict_proba(X_test)[:, 1]
 
         recommendations = get_threshold_recommendations(y_test, y_probs)
         best_f1 = recommendations["best_f1"]
@@ -274,42 +306,13 @@ elif menu == "Umbral":
         best_precision = recommendations["best_precision"]
         threshold_table = recommendations["table"]
 
-        st.markdown("### Recomendación automática de umbral")
-
         c1, c2, c3 = st.columns(3)
-        with c1:
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.metric("Mejor equilibrio (F1)", f"{best_f1['threshold']:.2f}")
-            st.write(f"Precision: {best_f1['precision']:.4f}")
-            st.write(f"Recall: {best_f1['recall']:.4f}")
-            st.write(f"F1: {best_f1['f1']:.4f}")
-            st.markdown('</div>', unsafe_allow_html=True)
+        c1.metric("Mejor F1", f"{best_f1['threshold']:.2f}")
+        c2.metric("Mayor Recall", f"{best_recall['threshold']:.2f}")
+        c3.metric("Mayor Precision", f"{best_precision['threshold']:.2f}")
 
-        with c2:
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.metric("Mayor Recall", f"{best_recall['threshold']:.2f}")
-            st.write(f"Precision: {best_recall['precision']:.4f}")
-            st.write(f"Recall: {best_recall['recall']:.4f}")
-            st.write(f"F1: {best_recall['f1']:.4f}")
-            st.markdown('</div>', unsafe_allow_html=True)
+        st.write("Recomendación inicial: usar el mejor umbral por F1 como punto de equilibrio.")
 
-        with c3:
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.metric("Mayor Precision", f"{best_precision['threshold']:.2f}")
-            st.write(f"Precision: {best_precision['precision']:.4f}")
-            st.write(f"Recall: {best_precision['recall']:.4f}")
-            st.write(f"F1: {best_precision['f1']:.4f}")
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        st.markdown("""
-        <div class="section-note">
-        Recomendación sugerida para el proyecto: usar el umbral con mejor F1 como punto de equilibrio inicial,
-        porque balancea la detección de fraudes y las falsas alarmas. Luego la gerencia puede moverlo según
-        el nivel de riesgo que quiera aceptar.
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown("### Simulación interactiva")
         threshold = st.slider("Selecciona el umbral", 0.01, 0.99, float(best_f1["threshold"]), 0.01)
         threshold_metrics = evaluate_threshold(y_test, y_probs, threshold)
 
@@ -323,30 +326,36 @@ elif menu == "Umbral":
         c8.metric("Falsas alarmas", threshold_metrics["fp"])
         c9.metric("Fraudes perdidos", threshold_metrics["missed_frauds"])
 
-        st.markdown("### Tabla de umbrales")
+        st.subheader("Tabla de umbrales")
         st.dataframe(threshold_table, use_container_width=True)
 
-        fig_threshold, ax_threshold = plt.subplots()
+        fig_threshold, ax_threshold = plt.subplots(figsize=(8, 4))
         ax_threshold.plot(threshold_table["threshold"], threshold_table["precision"], label="Precision")
         ax_threshold.plot(threshold_table["threshold"], threshold_table["recall"], label="Recall")
         ax_threshold.plot(threshold_table["threshold"], threshold_table["f1"], label="F1")
         ax_threshold.set_xlabel("Umbral")
         ax_threshold.set_ylabel("Valor")
-        ax_threshold.set_title("Comportamiento de métricas según el umbral")
+        ax_threshold.set_title("Métricas según el umbral")
         ax_threshold.legend()
         st.pyplot(fig_threshold)
 
 elif menu == "Simulación":
     st.subheader("Simulación de flujo de transacciones")
-    show_section_note("Aquí se muestran transacciones de ejemplo procesadas por el modelo para observar cómo se comporta la clasificación en casos simulados.")
+    show_section_note(
+        "Aquí se muestran algunas transacciones del dataset y cómo el modelo las clasifica."
+    )
+
     if not os.path.exists("models/best_model.pkl"):
         st.warning("Primero debes entrenar el modelo en la sección Modelado.")
     else:
-        model, scaler, metadata = load_best_model()
+        model, metadata = load_best_model()
 
         sample_df = df.sample(15, random_state=42).copy()
-        X_sample = sample_df.drop(columns=["Class"]).copy()
-        X_sample[["Time", "Amount"]] = scaler.transform(X_sample[["Time", "Amount"]])
+        X_sample = sample_df.drop(columns=["isFraud", "TransactionID"], errors="ignore").copy()
+
+        # Para asegurar el mismo conjunto usado en entrenamiento:
+        X_train, _, _, _ = split_data(df)
+        X_sample = X_sample[X_train.columns]
 
         probs = model.predict_proba(X_sample)[:, 1]
         threshold = metadata.get("selected_threshold", 0.5)
@@ -356,26 +365,34 @@ elif menu == "Simulación":
         sample_df["Predicción"] = preds
         sample_df["Estado"] = sample_df["Predicción"].map({0: "🟢 Legítima", 1: "🔴 Sospechosa"})
 
+        show_cols = [
+            col for col in [
+                "TransactionID", "TransactionDT", "TransactionAmt", "ProductCD",
+                "card4", "card6", "P_emaildomain", "DeviceType",
+                "isFraud", "Prob_Fraude", "Predicción", "Estado"
+            ] if col in sample_df.columns
+        ]
+
         st.dataframe(
-            sample_df[["Time", "Amount", "Class", "Prob_Fraude", "Predicción", "Estado"]]
-            .sort_values(by="Prob_Fraude", ascending=False),
+            sample_df[show_cols].sort_values(by="Prob_Fraude", ascending=False),
             use_container_width=True
         )
 
 elif menu == "Predicción manual":
     st.subheader("Predicción de una transacción")
-    show_section_note("Esta sección permite probar una transacción individual, usando un ejemplo real del dataset o ingresando valores manualmente.")
+    show_section_note(
+        "Puedes probar una fila real del dataset o ingresar algunos campos principales manualmente."
+    )
+
     if not os.path.exists("models/best_model.pkl"):
         st.warning("Primero debes entrenar el modelo en la sección Modelado.")
     else:
-        model, scaler, metadata = load_best_model()
+        model, metadata = load_best_model()
         threshold = metadata.get("selected_threshold", 0.5)
 
-        tab1, tab2 = st.tabs(["Probar con ejemplo", "Modo avanzado"])
+        tab1, tab2 = st.tabs(["Probar con ejemplo", "Modo manual simple"])
 
         with tab1:
-            st.write("Selecciona una fila del dataset para simular una predicción.")
-
             sample_index = st.slider(
                 "Selecciona el índice de la transacción de ejemplo",
                 min_value=0,
@@ -386,16 +403,14 @@ elif menu == "Predicción manual":
 
             sample_row = df.iloc[sample_index].copy()
 
-            preview_cols = ["Time", "Amount", "Class"]
-            st.write("Vista rápida del ejemplo seleccionado:")
+            preview_cols = [col for col in ["TransactionID", "TransactionAmt", "ProductCD", "card4", "card6", "isFraud"] if col in df.columns]
             st.dataframe(pd.DataFrame([sample_row[preview_cols]]), use_container_width=True)
 
             if st.button("Predecir ejemplo seleccionado"):
-                input_data = sample_row.drop(labels=["Class"]).to_frame().T
-                input_scaled = input_data.copy()
-                input_scaled[["Time", "Amount"]] = scaler.transform(input_scaled[["Time", "Amount"]])
+                X_train, _, _, _ = split_data(df)
+                input_data = sample_row[X_train.columns].to_frame().T
 
-                probability = float(model.predict_proba(input_scaled)[0][1])
+                probability = float(model.predict_proba(input_data)[0][1])
                 prediction = int(probability >= threshold)
 
                 c1, c2, c3 = st.columns(3)
@@ -403,96 +418,43 @@ elif menu == "Predicción manual":
                 c2.metric("Umbral usado", f"{threshold:.2f}")
                 c3.metric("Predicción", "Fraude" if prediction == 1 else "No fraude")
 
-                st.write("Clase real del dataset:", "Fraude" if int(sample_row["Class"]) == 1 else "No fraude")
+                st.write("Clase real del dataset:", "Fraude" if int(sample_row["isFraud"]) == 1 else "No fraude")
 
                 if prediction == 1:
-                    st.markdown(
-                        '<div class="result-alert">🔴 La transacción fue clasificada como sospechosa de fraude.</div>',
-                        unsafe_allow_html=True
-                    )
+                    st.markdown('<div class="result-alert">🔴 La transacción fue clasificada como sospechosa de fraude.</div>', unsafe_allow_html=True)
                 else:
-                    st.markdown(
-                        '<div class="result-ok">🟢 La transacción fue clasificada como legítima.</div>',
-                        unsafe_allow_html=True
-                    )
+                    st.markdown('<div class="result-ok">🟢 La transacción fue clasificada como legítima.</div>', unsafe_allow_html=True)
 
         with tab2:
-            st.write("""
-            Este modo permite ingresar manualmente todos los atributos.
-            Está pensado más para pruebas técnicas, porque V1 a V28 son variables transformadas.
-            """)
-
             with st.form("manual_prediction_form"):
-                st.markdown("### Datos principales")
                 c1, c2 = st.columns(2)
                 with c1:
-                    time_value = st.number_input("Time", value=0.0, format="%.6f")
+                    transaction_dt = st.number_input("TransactionDT", value=0.0, format="%.2f")
+                    transaction_amt = st.number_input("TransactionAmt", value=0.0, format="%.2f")
+                    addr1 = st.number_input("addr1", value=0.0, format="%.2f")
+                    addr2 = st.number_input("addr2", value=0.0, format="%.2f")
                 with c2:
-                    amount_value = st.number_input("Amount", value=0.0, format="%.6f")
-
-                st.markdown("### Variables técnicas")
-
-                with st.expander("Bloque 1 · V1 a V10"):
-                    col_a, col_b = st.columns(2)
-                    with col_a:
-                        v1 = st.number_input("V1", value=0.0, format="%.6f")
-                        v2 = st.number_input("V2", value=0.0, format="%.6f")
-                        v3 = st.number_input("V3", value=0.0, format="%.6f")
-                        v4 = st.number_input("V4", value=0.0, format="%.6f")
-                        v5 = st.number_input("V5", value=0.0, format="%.6f")
-                    with col_b:
-                        v6 = st.number_input("V6", value=0.0, format="%.6f")
-                        v7 = st.number_input("V7", value=0.0, format="%.6f")
-                        v8 = st.number_input("V8", value=0.0, format="%.6f")
-                        v9 = st.number_input("V9", value=0.0, format="%.6f")
-                        v10 = st.number_input("V10", value=0.0, format="%.6f")
-
-                with st.expander("Bloque 2 · V11 a V20"):
-                    col_c, col_d = st.columns(2)
-                    with col_c:
-                        v11 = st.number_input("V11", value=0.0, format="%.6f")
-                        v12 = st.number_input("V12", value=0.0, format="%.6f")
-                        v13 = st.number_input("V13", value=0.0, format="%.6f")
-                        v14 = st.number_input("V14", value=0.0, format="%.6f")
-                        v15 = st.number_input("V15", value=0.0, format="%.6f")
-                    with col_d:
-                        v16 = st.number_input("V16", value=0.0, format="%.6f")
-                        v17 = st.number_input("V17", value=0.0, format="%.6f")
-                        v18 = st.number_input("V18", value=0.0, format="%.6f")
-                        v19 = st.number_input("V19", value=0.0, format="%.6f")
-                        v20 = st.number_input("V20", value=0.0, format="%.6f")
-
-                with st.expander("Bloque 3 · V21 a V28"):
-                    col_e, col_f = st.columns(2)
-                    with col_e:
-                        v21 = st.number_input("V21", value=0.0, format="%.6f")
-                        v22 = st.number_input("V22", value=0.0, format="%.6f")
-                        v23 = st.number_input("V23", value=0.0, format="%.6f")
-                        v24 = st.number_input("V24", value=0.0, format="%.6f")
-                    with col_f:
-                        v25 = st.number_input("V25", value=0.0, format="%.6f")
-                        v26 = st.number_input("V26", value=0.0, format="%.6f")
-                        v27 = st.number_input("V27", value=0.0, format="%.6f")
-                        v28 = st.number_input("V28", value=0.0, format="%.6f")
+                    product_cd = st.selectbox("ProductCD", ["W", "C", "R", "H", "S"])
+                    card4 = st.selectbox("card4", ["visa", "mastercard", "discover", "american express"])
+                    card6 = st.selectbox("card6", ["debit", "credit", "charge debit"])
+                    p_email = st.text_input("P_emaildomain", value="gmail.com")
 
                 submitted = st.form_submit_button("Predecir transacción manual")
 
             if submitted:
-                input_data = pd.DataFrame([{
-                    "Time": time_value,
-                    "V1": v1, "V2": v2, "V3": v3, "V4": v4, "V5": v5,
-                    "V6": v6, "V7": v7, "V8": v8, "V9": v9, "V10": v10,
-                    "V11": v11, "V12": v12, "V13": v13, "V14": v14, "V15": v15,
-                    "V16": v16, "V17": v17, "V18": v18, "V19": v19, "V20": v20,
-                    "V21": v21, "V22": v22, "V23": v23, "V24": v24,
-                    "V25": v25, "V26": v26, "V27": v27, "V28": v28,
-                    "Amount": amount_value
-                }])
+                overrides = {
+                    "TransactionDT": transaction_dt,
+                    "TransactionAmt": transaction_amt,
+                    "addr1": addr1,
+                    "addr2": addr2,
+                    "ProductCD": product_cd,
+                    "card4": card4,
+                    "card6": card6,
+                    "P_emaildomain": p_email,
+                }
 
-                input_scaled = input_data.copy()
-                input_scaled[["Time", "Amount"]] = scaler.transform(input_scaled[["Time", "Amount"]])
-
-                probability = float(model.predict_proba(input_scaled)[0][1])
+                input_data = build_manual_input_dataframe(df, overrides)
+                probability = float(model.predict_proba(input_data)[0][1])
                 prediction = int(probability >= threshold)
 
                 c1, c2, c3 = st.columns(3)
@@ -501,12 +463,6 @@ elif menu == "Predicción manual":
                 c3.metric("Predicción", "Fraude" if prediction == 1 else "No fraude")
 
                 if prediction == 1:
-                    st.markdown(
-                        '<div class="result-alert">🔴 La transacción fue clasificada como sospechosa de fraude.</div>',
-                        unsafe_allow_html=True
-                    )
+                    st.markdown('<div class="result-alert">🔴 La transacción fue clasificada como sospechosa de fraude.</div>', unsafe_allow_html=True)
                 else:
-                    st.markdown(
-                        '<div class="result-ok">🟢 La transacción fue clasificada como legítima.</div>',
-                        unsafe_allow_html=True
-                    )
+                    st.markdown('<div class="result-ok">🟢 La transacción fue clasificada como legítima.</div>', unsafe_allow_html=True)
