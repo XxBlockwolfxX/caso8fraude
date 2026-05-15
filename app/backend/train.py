@@ -34,16 +34,19 @@ def build_pipeline(model_name: str, strategy: str, X_train: pd.DataFrame):
 
 def compare_models(X_train, y_train, X_test, y_test):
     """
-    Quitamos SMOTE en este dataset porque consume demasiada memoria.
-    Dejamos 4 combinaciones más ligeras:
+    Compara 6 combinaciones:
     - Logistic Regression + class_weight
     - Logistic Regression + undersample
+    - Decision Tree + class_weight
+    - Decision Tree + undersample
     - Random Forest + class_weight
     - Random Forest + undersample
     """
     combinations = [
         ("logistic_regression", "class_weight"),
         ("logistic_regression", "undersample"),
+        ("decision_tree", "class_weight"),
+        ("decision_tree", "undersample"),
         ("random_forest", "class_weight"),
         ("random_forest", "undersample"),
     ]
@@ -70,7 +73,7 @@ def compare_models(X_train, y_train, X_test, y_test):
             y_train,
             cv=skf,
             scoring=scoring,
-            n_jobs=1,   # más seguro en memoria
+            n_jobs=1,
             return_train_score=False
         )
 

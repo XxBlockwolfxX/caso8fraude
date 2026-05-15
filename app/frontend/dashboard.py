@@ -6,9 +6,10 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 import os
-import matplotlib.pyplot as plt
+import io
 import pandas as pd
 import streamlit as st
+import plotly.express as px
 
 from app.backend.data_loader import load_data, get_basic_info
 from app.backend.evaluate import evaluate_model, get_precision_recall_data, get_roc_data
@@ -18,7 +19,6 @@ from app.backend.preprocess import (
 )
 from app.backend.threshold import (
     evaluate_threshold,
-    generate_threshold_table,
     get_threshold_recommendations,
 )
 from app.backend.train import (
@@ -121,51 +121,184 @@ elif menu == "EDA":
         "TransactionAmt, TransactionDT y algunas categóricas."
     )
 
-    st.write("Primeras filas del dataset combinado")
-    st.dataframe(df.head(10), use_container_width=True)
+    # -----------------------------
+    # RESUMEN ESTADÍSTICO BONITO
+    # -----------------------------
+    st.subheader("Resumen estadístico del dataset")
 
+    total_filas = len(df)
+    total_columnas = df.shape[1]
+    num_cols = df.select_dtypes(include=["number"]).columns.tolist()
+    cat_cols = df.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
+    porcentaje_nulos_total = round(df.isna().mean().mean() * 100, 2)
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Filas", f"{total_filas:,}")
+    c2.metric("Columnas", total_columnas)
+    c3.metric("Numéricas", len(num_cols))
+    c4.metric("Categóricas", len(cat_cols))
+    c5.metric("% nulos global", f"{porcentaje_nulos_total}%")
+
+    st.markdown("---")
+
+    tab_num, tab_cat = st.tabs(["📊 Variables numéricas", "🧩 Variables categóricas"])
+
+    with tab_num:
+        numeric_summary = df.describe(include=["number"]).T.reset_index()
+        numeric_summary = numeric_summary.rename(columns={"index": "Variable"})
+
+        numeric_summary = numeric_summary[
+            ~numeric_summary["Variable"].isin(["TransactionID", "isFraud"])
+        ]
+
+        for col in ["mean", "std", "min", "25%", "50%", "75%", "max"]:
+            if col in numeric_summary.columns:
+                numeric_summary[col] = numeric_summary[col].round(2)
+
+        if "count" in numeric_summary.columns:
+            numeric_summary["count"] = numeric_summary["count"].astype(int)
+
+        st.dataframe(
+            numeric_summary,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Variable": st.column_config.TextColumn("Variable"),
+                "count": st.column_config.NumberColumn("No nulos", format="%d"),
+                "mean": st.column_config.NumberColumn("Media", format="%.2f"),
+                "std": st.column_config.NumberColumn("Desv. estándar", format="%.2f"),
+                "min": st.column_config.NumberColumn("Mínimo", format="%.2f"),
+                "25%": st.column_config.NumberColumn("Q1 (25%)", format="%.2f"),
+                "50%": st.column_config.NumberColumn("Mediana", format="%.2f"),
+                "75%": st.column_config.NumberColumn("Q3 (75%)", format="%.2f"),
+                "max": st.column_config.NumberColumn("Máximo", format="%.2f"),
+            }
+        )
+
+    with tab_cat:
+        categorical_cols = df.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
+
+        if categorical_cols:
+            cat_summary_rows = []
+            for col in categorical_cols:
+                moda = df[col].mode(dropna=True)
+                cat_summary_rows.append({
+                    "Variable": col,
+                    "No nulos": int(df[col].notna().sum()),
+                    "Nulos": int(df[col].isna().sum()),
+                    "% Nulos": round(df[col].isna().mean() * 100, 2),
+                    "Categorías únicas": int(df[col].nunique(dropna=True)),
+                    "Moda": str(moda.iloc[0]) if not moda.empty else "Sin moda"
+                })
+
+            categorical_summary = pd.DataFrame(cat_summary_rows)
+            categorical_summary = categorical_summary.sort_values(
+                by=["% Nulos", "Categorías únicas"],
+                ascending=[False, False]
+            ).reset_index(drop=True)
+
+            st.dataframe(
+                categorical_summary,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Variable": st.column_config.TextColumn("Variable"),
+                    "No nulos": st.column_config.NumberColumn("No nulos", format="%d"),
+                    "Nulos": st.column_config.NumberColumn("Nulos", format="%d"),
+                    "% Nulos": st.column_config.NumberColumn("% Nulos", format="%.2f %%"),
+                    "Categorías únicas": st.column_config.NumberColumn("Categorías únicas", format="%d"),
+                    "Moda": st.column_config.TextColumn("Moda"),
+                }
+            )
+        else:
+            st.info("No se encontraron variables categóricas en el dataset.")
+
+    # -----------------------------
+    # DESCARGA EXCEL DE FRAUDES
+    # -----------------------------
+    st.subheader("Descargar transacciones con fraude")
+
+    fraud_df = df[df["isFraud"] == 1].copy()
+    st.write(f"Cantidad de transacciones fraudulentas encontradas: {len(fraud_df)}")
+
+    excel_buffer = io.BytesIO()
+    with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+        fraud_df.to_excel(writer, index=False, sheet_name="Fraudes")
+
+    st.download_button(
+        label="Descargar Excel de transacciones fraudulentas",
+        data=excel_buffer.getvalue(),
+        file_name="transacciones_fraude.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+    # -----------------------------
+    # GRÁFICOS
+    # -----------------------------
     st.subheader("Distribución de clases (isFraud)")
-    fig, ax = plt.subplots(figsize=(6, 4))
-    df["isFraud"].value_counts().sort_index().plot(kind="bar", ax=ax)
-    ax.set_xticks([0, 1])
-    ax.set_xticklabels(["Legítima", "Fraude"], rotation=0)
-    ax.set_ylabel("Cantidad")
-    ax.set_title("Desbalance de clases")
-    st.pyplot(fig)
+    fraud_counts = df["isFraud"].value_counts().sort_index().reset_index()
+    fraud_counts.columns = ["isFraud", "Cantidad"]
+    fraud_counts["isFraud"] = fraud_counts["isFraud"].map({0: "Legítima", 1: "Fraude"})
+
+    fig_class = px.bar(
+        fraud_counts,
+        x="isFraud",
+        y="Cantidad",
+        title="Desbalance de clases",
+        text="Cantidad"
+    )
+    fig_class.update_layout(xaxis_title="", yaxis_title="Cantidad")
+    st.plotly_chart(fig_class, use_container_width=True)
 
     st.subheader("Boxplot de TransactionAmt por isFraud")
-    fig2, ax2 = plt.subplots(figsize=(8, 4))
-    df.boxplot(column="TransactionAmt", by="isFraud", ax=ax2)
-    ax2.set_title("TransactionAmt por clase")
-    ax2.set_xlabel("isFraud")
-    ax2.set_ylabel("TransactionAmt")
-    st.pyplot(fig2)
+    fig_amt = px.box(
+        df,
+        x="isFraud",
+        y="TransactionAmt",
+        title="TransactionAmt por clase",
+        points=False
+    )
+    fig_amt.update_xaxes(tickvals=[0, 1], ticktext=["Legítima", "Fraude"])
+    st.plotly_chart(fig_amt, use_container_width=True)
 
     st.subheader("Boxplot de TransactionDT por isFraud")
-    fig3, ax3 = plt.subplots(figsize=(8, 4))
-    df.boxplot(column="TransactionDT", by="isFraud", ax=ax3)
-    ax3.set_title("TransactionDT por clase")
-    ax3.set_xlabel("isFraud")
-    ax3.set_ylabel("TransactionDT")
-    st.pyplot(fig3)
+    fig_dt = px.box(
+        df,
+        x="isFraud",
+        y="TransactionDT",
+        title="TransactionDT por clase",
+        points=False
+    )
+    fig_dt.update_xaxes(tickvals=[0, 1], ticktext=["Legítima", "Fraude"])
+    st.plotly_chart(fig_dt, use_container_width=True)
 
     if "ProductCD" in df.columns:
         st.subheader("Distribución de ProductCD")
-        product_counts = df["ProductCD"].fillna("Missing").value_counts().head(10)
-        fig4, ax4 = plt.subplots(figsize=(8, 4))
-        product_counts.plot(kind="bar", ax=ax4)
-        ax4.set_title("Frecuencia de ProductCD")
-        ax4.set_ylabel("Cantidad")
-        st.pyplot(fig4)
+        product_counts = df["ProductCD"].fillna("Missing").value_counts().head(10).reset_index()
+        product_counts.columns = ["ProductCD", "Cantidad"]
+
+        fig_product = px.bar(
+            product_counts,
+            x="ProductCD",
+            y="Cantidad",
+            title="Frecuencia de ProductCD",
+            text="Cantidad"
+        )
+        st.plotly_chart(fig_product, use_container_width=True)
 
     if "card4" in df.columns:
         st.subheader("Distribución de card4")
-        card4_counts = df["card4"].fillna("Missing").value_counts().head(10)
-        fig5, ax5 = plt.subplots(figsize=(8, 4))
-        card4_counts.plot(kind="bar", ax=ax5)
-        ax5.set_title("Frecuencia de card4")
-        ax5.set_ylabel("Cantidad")
-        st.pyplot(fig5)
+        card4_counts = df["card4"].fillna("Missing").value_counts().head(10).reset_index()
+        card4_counts.columns = ["card4", "Cantidad"]
+
+        fig_card4 = px.bar(
+            card4_counts,
+            x="card4",
+            y="Cantidad",
+            title="Frecuencia de card4",
+            text="Cantidad"
+        )
+        st.plotly_chart(fig_card4, use_container_width=True)
 
     st.subheader("Top columnas con más valores nulos")
     missing_df = (
@@ -175,39 +308,67 @@ elif menu == "EDA":
         .reset_index()
     )
     missing_df.columns = ["Columna", "Porcentaje_nulos"]
+    missing_df["Porcentaje_nulos"] = missing_df["Porcentaje_nulos"] * 100
 
-    fig6, ax6 = plt.subplots(figsize=(10, 5))
-    ax6.barh(missing_df["Columna"], missing_df["Porcentaje_nulos"])
-    ax6.set_title("Porcentaje de nulos por columna")
-    ax6.set_xlabel("Porcentaje")
-    ax6.invert_yaxis()
-    st.pyplot(fig6)
+    fig_missing = px.bar(
+        missing_df,
+        x="Porcentaje_nulos",
+        y="Columna",
+        orientation="h",
+        title="Porcentaje de nulos por columna",
+        text="Porcentaje_nulos"
+    )
+    fig_missing.update_layout(yaxis=dict(categoryorder="total ascending"))
+    st.plotly_chart(fig_missing, use_container_width=True)
 
 elif menu == "Modelado":
     st.subheader("Comparación de modelos")
     show_section_note(
-    "En esta sección se comparan Logistic Regression y Random Forest con "
-    "class_weight y undersampling. En este dataset grande se quitó SMOTE "
-    "para evitar errores de memoria."
-)
+        "En esta sección se comparan Logistic Regression, Decision Tree y Random Forest "
+        "con class_weight y undersampling. En este dataset grande se quitó SMOTE "
+        "para evitar errores de memoria."
+    )
+
     X_train, X_test, y_train, y_test = split_data(df)
 
     st.write("Vista del efecto del balanceo")
     sampling_preview = get_sampling_preview(y_train)
     st.dataframe(sampling_preview, use_container_width=True)
 
-    fig_sampling, ax_sampling = plt.subplots(figsize=(7, 4))
-    sampling_preview.plot(kind="bar", ax=ax_sampling)
-    ax_sampling.set_title("Original vs balanceo")
-    ax_sampling.set_ylabel("Cantidad")
-    ax_sampling.set_xlabel("Clase")
-    st.pyplot(fig_sampling)
+    sampling_plot_df = sampling_preview.reset_index().rename(columns={"index": "Clase"})
+    sampling_melt = sampling_plot_df.melt(id_vars="Clase", var_name="Escenario", value_name="Cantidad")
+
+    fig_sampling = px.bar(
+        sampling_melt,
+        x="Clase",
+        y="Cantidad",
+        color="Escenario",
+        barmode="group",
+        title="Original vs balanceo",
+        text="Cantidad"
+    )
+    st.plotly_chart(fig_sampling, use_container_width=True)
 
     if st.button("Entrenar y comparar modelos"):
         results_df, trained_models = compare_models(X_train, y_train, X_test, y_test)
 
         st.write("Resultados comparativos")
         st.dataframe(results_df, use_container_width=True)
+
+        metric_cols = [
+            "model_name", "strategy", "cv_pr_auc_mean", "cv_f1_mean", "cv_recall_mean", "cv_precision_mean"
+        ]
+        chart_df = results_df[metric_cols].copy()
+        chart_df["Modelo"] = chart_df["model_name"] + " + " + chart_df["strategy"]
+
+        fig_models = px.bar(
+            chart_df,
+            x="Modelo",
+            y="cv_pr_auc_mean",
+            title="Comparación de modelos por CV PR-AUC",
+            text="cv_pr_auc_mean"
+        )
+        st.plotly_chart(fig_models, use_container_width=True)
 
         best_row = results_df.iloc[0]
         best_key = f"{best_row['model_name']}_{best_row['strategy']}"
@@ -261,26 +422,42 @@ elif menu == "Evaluación":
             cm,
             index=["Real No Fraude", "Real Fraude"],
             columns=["Pred No Fraude", "Pred Fraude"]
+        ).reset_index().rename(columns={"index": "Real"})
+        cm_melt = cm_df.melt(id_vars="Real", var_name="Predicción", value_name="Cantidad")
+
+        fig_cm = px.density_heatmap(
+            cm_melt,
+            x="Predicción",
+            y="Real",
+            z="Cantidad",
+            text_auto=True,
+            title="Matriz de confusión"
         )
-        st.dataframe(cm_df, use_container_width=True)
+        st.plotly_chart(fig_cm, use_container_width=True)
 
         st.subheader("Curva Precision-Recall")
         precision, recall, _ = get_precision_recall_data(y_test, results["y_probs"])
-        fig_pr, ax_pr = plt.subplots(figsize=(6, 4))
-        ax_pr.plot(recall, precision)
-        ax_pr.set_xlabel("Recall")
-        ax_pr.set_ylabel("Precision")
-        ax_pr.set_title("Curva Precision-Recall")
-        st.pyplot(fig_pr)
+        pr_df = pd.DataFrame({"Recall": recall, "Precision": precision})
+
+        fig_pr = px.line(
+            pr_df,
+            x="Recall",
+            y="Precision",
+            title="Curva Precision-Recall"
+        )
+        st.plotly_chart(fig_pr, use_container_width=True)
 
         st.subheader("Curva ROC")
         fpr, tpr, _ = get_roc_data(y_test, results["y_probs"])
-        fig_roc, ax_roc = plt.subplots(figsize=(6, 4))
-        ax_roc.plot(fpr, tpr)
-        ax_roc.set_xlabel("False Positive Rate")
-        ax_roc.set_ylabel("True Positive Rate")
-        ax_roc.set_title("Curva ROC")
-        st.pyplot(fig_roc)
+        roc_df = pd.DataFrame({"FPR": fpr, "TPR": tpr})
+
+        fig_roc = px.line(
+            roc_df,
+            x="FPR",
+            y="TPR",
+            title="Curva ROC"
+        )
+        st.plotly_chart(fig_roc, use_container_width=True)
 
         st.subheader("Reporte de clasificación")
         st.text(results["classification_report"])
@@ -329,15 +506,21 @@ elif menu == "Umbral":
         st.subheader("Tabla de umbrales")
         st.dataframe(threshold_table, use_container_width=True)
 
-        fig_threshold, ax_threshold = plt.subplots(figsize=(8, 4))
-        ax_threshold.plot(threshold_table["threshold"], threshold_table["precision"], label="Precision")
-        ax_threshold.plot(threshold_table["threshold"], threshold_table["recall"], label="Recall")
-        ax_threshold.plot(threshold_table["threshold"], threshold_table["f1"], label="F1")
-        ax_threshold.set_xlabel("Umbral")
-        ax_threshold.set_ylabel("Valor")
-        ax_threshold.set_title("Métricas según el umbral")
-        ax_threshold.legend()
-        st.pyplot(fig_threshold)
+        metric_threshold_df = threshold_table[["threshold", "precision", "recall", "f1"]].copy()
+        metric_threshold_melt = metric_threshold_df.melt(
+            id_vars="threshold",
+            var_name="Métrica",
+            value_name="Valor"
+        )
+
+        fig_threshold = px.line(
+            metric_threshold_melt,
+            x="threshold",
+            y="Valor",
+            color="Métrica",
+            title="Métricas según el umbral"
+        )
+        st.plotly_chart(fig_threshold, use_container_width=True)
 
 elif menu == "Simulación":
     st.subheader("Simulación de flujo de transacciones")
@@ -353,7 +536,6 @@ elif menu == "Simulación":
         sample_df = df.sample(15, random_state=42).copy()
         X_sample = sample_df.drop(columns=["isFraud", "TransactionID"], errors="ignore").copy()
 
-        # Para asegurar el mismo conjunto usado en entrenamiento:
         X_train, _, _, _ = split_data(df)
         X_sample = X_sample[X_train.columns]
 
@@ -377,6 +559,20 @@ elif menu == "Simulación":
             sample_df[show_cols].sort_values(by="Prob_Fraude", ascending=False),
             use_container_width=True
         )
+
+        sim_chart_df = sample_df[show_cols].copy()
+        if "TransactionID" in sim_chart_df.columns:
+            sim_chart_df["TransactionID"] = sim_chart_df["TransactionID"].astype(str)
+
+        if "TransactionID" in sim_chart_df.columns:
+            fig_sim = px.bar(
+                sim_chart_df.sort_values(by="Prob_Fraude", ascending=False),
+                x="TransactionID",
+                y="Prob_Fraude",
+                color="Estado",
+                title="Probabilidad de fraude por transacción"
+            )
+            st.plotly_chart(fig_sim, use_container_width=True)
 
 elif menu == "Predicción manual":
     st.subheader("Predicción de una transacción")
@@ -461,6 +657,12 @@ elif menu == "Predicción manual":
                 c1.metric("Probabilidad de fraude", f"{probability:.6f}")
                 c2.metric("Umbral usado", f"{threshold:.2f}")
                 c3.metric("Predicción", "Fraude" if prediction == 1 else "No fraude")
+
+                result_df = pd.DataFrame({
+                    "Resultado": ["Probabilidad", "Umbral", "Predicción"],
+                    "Valor": [probability, threshold, "Fraude" if prediction == 1 else "No fraude"]
+                })
+                st.dataframe(result_df, use_container_width=True)
 
                 if prediction == 1:
                     st.markdown('<div class="result-alert">🔴 La transacción fue clasificada como sospechosa de fraude.</div>', unsafe_allow_html=True)

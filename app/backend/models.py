@@ -1,5 +1,6 @@
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
+from sklearn.tree import DecisionTreeClassifier
 
 
 def get_model(model_name: str, strategy: str):
@@ -12,6 +13,22 @@ def get_model(model_name: str, strategy: str):
             )
         return LogisticRegression(
             max_iter=600,
+            random_state=42
+        )
+
+    if model_name == "decision_tree":
+        if strategy == "class_weight":
+            return DecisionTreeClassifier(
+                class_weight="balanced",
+                max_depth=10,
+                min_samples_split=20,
+                min_samples_leaf=10,
+                random_state=42
+            )
+        return DecisionTreeClassifier(
+            max_depth=10,
+            min_samples_split=20,
+            min_samples_leaf=10,
             random_state=42
         )
 
